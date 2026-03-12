@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Logger → Jira</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="jira-config.js"></script>
+</head>
+<body>
+
+<!-- Sticky Top Bar -->
+<div class="top-bar" id="topBar">
+  <div class="logo-dot"></div>
+  <div class="date-info">
+    <div class="date-value" id="todayDate"></div>
+    <div class="task-count" id="taskCountLine">—</div>
+  </div>
+  <div class="top-bar-actions">
+    <div class="bottom-info" id="bottomInfo"></div>
+    <button class="btn-sync" id="syncBtn" onclick="syncFromJira()">
+      <span class="sync-icon">⟳</span> Sync
+    </button>
+    <button class="btn-clear" onclick="clearDone()">Clear Done</button>
+    <button class="btn-push-all" id="pushAllBtn" onclick="pushAll()" disabled>▲ Push All</button>
+    <button class="btn-settings" id="settingsBtn" onclick="toggleConfig()" title="Jira Config">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      <span class="config-dot" id="configStatus"></span>
+    </button>
+  </div>
+</div>
+
+<!-- Config Panel -->
+<div class="config-panel collapsed" id="configPanel">
+  <div class="config-body">
+    <div class="full">
+      <label>Parent Issue URL</label>
+      <input type="text" id="parentUrl" placeholder="https://yourcompany.atlassian.net/browse/PROJ-123"
+        oninput="parseParentUrl(this.value)" />
+      <p class="hint">Paste the full Jira issue URL — domain, project key and issue key are auto-detected</p>
+    </div>
+    <div class="full" style="display:flex;gap:12px;">
+      <div style="flex:1">
+        <label>Email</label>
+        <input type="email" id="jiraEmail" placeholder="you@company.com" />
+        <p class="hint">Required for Jira Cloud Basic Auth</p>
+      </div>
+      <div style="flex:1">
+        <label>API Token</label>
+        <input type="password" id="jiraToken" placeholder="Your Jira API token" />
+        <p class="hint"><a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank">Generate token ↗</a></p>
+      </div>
+    </div>
+    <div class="full" id="parsedDisplay" style="display:none">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span class="parsed-tag" id="parsedUrl"></span>
+        <span class="parsed-tag" id="parsedProject"></span>
+        <span class="parsed-tag" id="parsedIssue"></span>
+      </div>
+    </div>
+    <div class="full">
+      <label>Proxy URL</label>
+      <input type="text" id="proxyUrl" placeholder="http://localhost:8765/jira-proxy" />
+      <p class="hint">Local dev: http://localhost:8765/jira-proxy &nbsp;·&nbsp; Production: your Cloudflare Worker URL</p>
+    </div>
+    <div class="full" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <button class="btn-save" onclick="saveConfig()">Save & Connect</button>
+      <button class="btn-secondary" onclick="testConnection()">Test Connection</button>
+      <span id="testResult" style="font-family:'DM Mono',monospace;font-size:11px;"></span>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+    <!-- Add Task -->
+  <div class="add-area">
+    <div class="add-area-title">+ New Task</div>
+    <div class="input-row">
+      <textarea class="task-input" id="taskInput"
+        placeholder="What are you working on? (Enter to add)"
+        onkeydown="handleKey(event)"></textarea>
+      <button class="btn-add" onclick="addTask()">+</button>
+    </div>
+    <div class="extra-fields">
+      <textarea class="desc-input" id="descInput" placeholder="Notes / description (optional)"></textarea>
+      <div class="attach-zone" id="attachZone"
+        onclick="document.getElementById('fileInput').click()"
+        ondragover="event.preventDefault();this.classList.add('dragover')"
+        ondragleave="this.classList.remove('dragover')"
+        ondrop="onDrop(event)">
+        <span style="font-size:18px;opacity:0.35">📎</span>
+        <div class="attach-zone-label">Drag & drop, <span>browse</span>, or <span>Ctrl+V</span> to paste screenshot</div>
+      </div>
+      <div class="attach-previews" id="attachPreviews"></div>
+      <input type="file" id="fileInput" multiple
+        accept="image/*,.pdf,.doc,.docx,.txt,.csv,.zip"
+        style="display:none" onchange="onFileSelect(event)" />
+    </div>
+  </div>
+
+  <!-- Task List -->
+  <div class="section-label" id="sectionLabel"></div>
+  <div class="task-list" id="taskList"></div>
+
+</div>
+
+
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <span class="lightbox-close">✕</span>
+  <img id="lightboxImg" src="" />
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// Proxy URL — update this after deploying your Cloudflare Worker
+// Local dev:  'http://localhost:8765/jira-proxy'
+// Production: 'https://jira-proxy.yourname.workers.dev'
+// ─────────────────────────────────────────────────────────────
+const PROXY_URL = (() => {
+  const saved = sessionStorage.getItem('proxyUrl');
+  return saved || 'http://localhost:8765/jira-proxy';
+})();
+
+// ─────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────
+let tasks = [];
+let config = {};
+let pendingAttachments = [];
+let myAccountId = null;
+
+// ─────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────
+window.onload = () => {
+  loadConfig();
+  loadTasks();
+  document.getElementById('todayDate').textContent =
+    new Date().toLocaleDateString('en-MY', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  renderTasks();
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.status-pill')) closeAllDropdowns();
+  });
+  // Global paste handler — catches Ctrl+V / Cmd+V anywhere on the page
+  document.addEventListener('paste', onPaste);
+};
+
+// ─────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────
+// Parse URL like https://company.atlassian.net/browse/PROJ-123
+function parseParentUrl(val) {
+  const match = val.trim().match(/^(https:\/\/[^/]+)\/browse\/([A-Z][A-Z0-9]+-\d+)/i);
+  const display = document.getElementById('parsedDisplay');
+  if (match) {
+    const jiraUrl    = match[1];
+    const parentKey  = match[2].toUpperCase();
+    const projectKey = parentKey.replace(/-\d+$/, '');
+    document.getElementById('parsedUrl').textContent     = '🌐 ' + jiraUrl;
+    document.getElementById('parsedProject').textContent = '📁 ' + projectKey;
+    document.getElementById('parsedIssue').textContent   = '🎫 ' + parentKey;
+    display.style.display = 'block';
+  } else {
+    display.style.display = 'none';
+  }
+}
+
+function loadConfig() {
+  const s = sessionStorage.getItem('jiraConfig');
+  if (!s) return;
+  config = JSON.parse(s);
+  // Reconstruct the URL field from saved parts
+  if (config.jiraUrl && config.parentKey) {
+    const fullUrl = `${config.jiraUrl}/browse/${config.parentKey}`;
+    document.getElementById('parentUrl').value  = fullUrl;
+    parseParentUrl(fullUrl);
+  }
+  document.getElementById('jiraEmail').value  = config.jiraEmail  || '';
+  document.getElementById('jiraToken').value  = config.jiraToken  || '';
+  document.getElementById('proxyUrl').value   = sessionStorage.getItem('proxyUrl') || 'http://localhost:8765/jira-proxy';
+  if (config.jiraUrl && config.jiraToken) {
+    document.getElementById('configStatus').classList.add('connected');
+    collapseConfig();
+    fetchMyAccountId();
+  }
+}
+
+function saveConfig() {
+  const raw   = document.getElementById('parentUrl').value.trim();
+  const match = raw.match(/^(https:\/\/[^/]+)\/browse\/([A-Z][A-Z0-9]+-\d+)/i);
+  if (!match) {
+    toast('✗ Invalid parent URL — paste the full Jira issue link', 'error');
+    return;
+  }
+  config = {
+    jiraUrl:    match[1],
+    parentKey:  match[2].toUpperCase(),
+    projectKey: match[2].toUpperCase().replace(/-\d+$/, ''),
+    jiraEmail:  document.getElementById('jiraEmail').value.trim(),
+    jiraToken:  document.getElementById('jiraToken').value.trim(),
+  };
+  const proxyVal = document.getElementById('proxyUrl').value.trim() || 'http://localhost:8765/jira-proxy';
+  sessionStorage.setItem('proxyUrl', proxyVal);
+  // Reassign the module-level proxy URL
+  window._proxyUrl = proxyVal;
+  sessionStorage.setItem('jiraConfig', JSON.stringify(config));
+  document.getElementById('configStatus').classList.add('connected');
+  collapseConfig();
+  toast('Config saved ✓', 'success');
+  fetchMyAccountId();
+}
+
+async function testConnection() {
+  const el  = document.getElementById('testResult');
+  el.style.color = '#7070aa'; el.textContent = 'Testing…';
+  // Save first so config is populated
+  const raw   = document.getElementById('parentUrl').value.trim();
+  const match = raw.match(/^(https:\/\/[^/]+)\/browse\/([A-Z][A-Z0-9]+-\d+)/i);
+  if (!match) { el.style.color = '#fa6d8a'; el.textContent = '✗ Paste a valid Jira URL first'; return; }
+  const url    = match[1];
+  const parent = match[2].toUpperCase();
+  const email  = document.getElementById('jiraEmail').value.trim();
+  const token  = document.getElementById('jiraToken').value.trim();
+  try {
+    const r = await proxy(url, email, token, 'GET', `/rest/api/3/issue/${parent}`);
+    const d = await r.json();
+    if (r.ok) { el.style.color = '#4dffa0'; el.textContent = `✓ ${d.fields.summary.slice(0,38)}…`; }
+    else       { el.style.color = '#fa6d8a'; el.textContent = `✗ ${r.status}: ${d.errorMessages?.[0] || 'Check credentials'}`; }
+  } catch(e)   { el.style.color = '#fa6d8a'; el.textContent = `✗ ${e.message}`; }
+}
+
+async function fetchMyAccountId() {
+  try {
+    const r = await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken, 'GET', '/rest/api/3/myself');
+    if (r.ok) { const d = await r.json(); myAccountId = d.accountId; }
+  } catch(e) {}
+}
+
+function toggleConfig() {
+  const panel = document.getElementById('configPanel');
+  const btn   = document.getElementById('settingsBtn');
+  panel.classList.toggle('collapsed');
+  btn.classList.toggle('active');
+}
+function collapseConfig() {
+  document.getElementById('configPanel').classList.add('collapsed');
+  document.getElementById('settingsBtn').classList.remove('active');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Task Storage
+// ─────────────────────────────────────────────────────────────
+function loadTasks() {
+  tasks = JSON.parse(sessionStorage.getItem('tasks_' + new Date().toDateString()) || '[]');
+}
+function saveTasks() {
+  sessionStorage.setItem('tasks_' + new Date().toDateString(), JSON.stringify(tasks));
+}
+
+// ─────────────────────────────────────────────────────────────
+// Add Task
+// ─────────────────────────────────────────────────────────────
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addTask(); }
+}
+
+function addTask() {
+  const summary = document.getElementById('taskInput').value.trim();
+  if (!summary) return;
+  tasks.unshift({
+    id:             Date.now(),
+    summary,
+    description:    document.getElementById('descInput').value.trim(),
+    attachments:    pendingAttachments.map(a => ({ name: a.name, type: a.type, dataUrl: a.dataUrl })),
+    status:         'local',
+    jiraStatusName: null,
+    time:           new Date().toLocaleTimeString('en-MY', { hour:'2-digit', minute:'2-digit' }),
+    jiraKey:        null,
+    jiraId:         null,
+    jiraUrl:        null,
+    errorMsg:       null,
+  });
+  saveTasks();
+  document.getElementById('taskInput').value = '';
+  document.getElementById('descInput').value = '';
+  pendingAttachments = [];
+  renderAttachPreviews();
+  renderTasks();
+  toast(`Added: "${summary.slice(0,28)}"`, 'info');
+}
+
+function removeTask(id) { tasks = tasks.filter(t => t.id !== id); saveTasks(); renderTasks(); }
+function clearDone()     { tasks = tasks.filter(t => t.status !== 'done'); saveTasks(); renderTasks(); }
+
+// ─────────────────────────────────────────────────────────────
+// Attachments
+// ─────────────────────────────────────────────────────────────
+function onPaste(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  const images = Array.from(items).filter(i => i.type.startsWith('image/'));
+  if (!images.length) return;
+  // Briefly flash the attach zone so user knows it was captured
+  const zone = document.getElementById('attachZone');
+  zone.classList.add('dragover');
+  setTimeout(() => zone.classList.remove('dragover'), 600);
+  images.forEach(item => {
+    const file = item.getAsFile();
+    if (!file) return;
+    // Name it with a timestamp since clipboard images have no filename
+    const ext  = file.type.split('/')[1] || 'png';
+    const name = `screenshot-${new Date().toISOString().replace(/[:.]/g,'-').slice(0,19)}.${ext}`;
+    const namedFile = new File([file], name, { type: file.type });
+    const reader = new FileReader();
+    reader.onload = ev => {
+      pendingAttachments.push({ name, type: file.type, dataUrl: ev.target.result, file: namedFile });
+      renderAttachPreviews();
+      toast(`Screenshot pasted: ${name}`, 'info');
+    };
+    reader.readAsDataURL(namedFile);
+  });
+}
+
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('attachZone').classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+}
+function onFileSelect(e) { handleFiles(e.target.files); e.target.value = ''; }
+
+function handleFiles(files) {
+  Array.from(files).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      pendingAttachments.push({ name: file.name, type: file.type, dataUrl: ev.target.result, file });
+      renderAttachPreviews();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderAttachPreviews() {
+  document.getElementById('attachPreviews').innerHTML = pendingAttachments.map((a, i) => `
+    <div class="attach-preview">
+      ${a.type.startsWith('image/')
+        ? `<img src="${esc(a.dataUrl)}" />`
+        : `<div class="attach-file-icon">📄<br>${esc(a.name.slice(0,12))}</div>`}
+      <button class="attach-remove" onclick="pendingAttachments.splice(${i},1);renderAttachPreviews()">✕</button>
+    </div>`).join('');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Render
+// ─────────────────────────────────────────────────────────────
+function stClass(t) {
+  if (t.status === 'local')   return 'local';
+  if (t.status === 'error')   return 'error';
+  if (t.status === 'pushing') return 'inprogress';
+  // Delegate to jira-config.js
+  return JIRA_CONFIG.statusClassMap(t.jiraStatusName);
+}
+
+function pillHtml(t) {
+  if (t.status === 'local')   return `<span class="status-pill local">● local</span>`;
+  if (t.status === 'pushing') return `<span class="status-pill pushing">● pushing…</span>`;
+  if (t.status === 'error')   return `<span class="status-pill error">✗ failed</span>`;
+
+  const cls   = stClass(t);
+  const name  = t.jiraStatusName || 'To Do';
+  // Find color from JIRA_CONFIG.statuses or fall back
+  const def   = JIRA_CONFIG.statuses.find(s => s.cssClass === cls);
+  const color = def ? def.color : '#aaa';
+
+  // Build dropdown options from JIRA_CONFIG.statuses
+  const options = JIRA_CONFIG.statuses.map(s => `
+    <div class="status-option" onclick="changeStatus(event,${t.id},'${esc(s.jiraName)}')">
+      <span class="status-dot" style="background:${s.color}"></span>${esc(s.label)}
+    </div>`).join('');
+
+  return `
+    <span class="status-pill ${cls}" onclick="toggleDd(event,${t.id})">
+      <span style="width:7px;height:7px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0"></span>
+      ${esc(name)} ▾
+      <div class="status-dropdown" id="dd-${t.id}" style="display:none">
+        ${options}
+      </div>
+    </span>`;
+}
+
+function attachThumbsHtml(atts) {
+  if (!atts || !atts.length) return '';
+  return `<div class="task-attachments">${atts.map(a =>
+    a.type.startsWith('image/')
+      ? `<div class="task-attach-thumb" onclick="openLightbox('${esc(a.dataUrl)}')"><img src="${esc(a.dataUrl)}" /></div>`
+      : `<div class="task-attach-file">📄<span>${esc(a.name.slice(0,10))}</span></div>`
+  ).join('')}</div>`;
+}
+
+function renderTasks() {
+  const pending = tasks.filter(t => t.status === 'local' || t.status === 'error');
+  const inJira  = tasks.filter(t => t.status === 'done');
+
+  document.getElementById('taskCountLine').textContent = `${pending.length} pending · ${inJira.length} in Jira`;
+  document.getElementById('pushAllBtn').disabled = pending.length === 0;
+  document.getElementById('bottomInfo').innerHTML = tasks.length === 0
+    ? 'No tasks yet today'
+    : `<strong>${pending.length}</strong> pending · <strong>${inJira.length}</strong> in Jira`;
+  document.getElementById('sectionLabel').textContent = tasks.length ? `Today's Tasks — ${tasks.length}` : '';
+
+  const list = document.getElementById('taskList');
+  if (!tasks.length) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">📋</div><p>No tasks yet.<br>Type above to start logging.</p></div>`;
+    return;
+  }
+  list.innerHTML = tasks.map((t, i) => `
+    <div class="task-item st-${stClass(t)}" id="task-${t.id}">
+      <div class="task-num">${String(tasks.length - i).padStart(2,'0')}</div>
+      <div class="task-body">
+        <div class="task-summary">${esc(t.summary)}</div>
+        ${t.description ? `<div class="task-desc">${esc(t.description)}</div>` : ''}
+        ${attachThumbsHtml(t.attachments)}
+        <div class="task-meta">
+          <span class="task-time">${t.time}</span>
+          ${pillHtml(t)}
+          ${t.jiraKey  ? `<a class="task-jira-link" href="${t.jiraUrl}" target="_blank">${t.jiraKey} ↗</a>` : ''}
+          ${t.errorMsg ? `<span class="task-error-msg">${esc(t.errorMsg)}</span>` : ''}
+        </div>
+      </div>
+      <div class="task-actions">
+        ${t.status === 'local' || t.status === 'error'
+          ? `<button class="btn-icon push" title="Push to Jira" onclick="pushOne(${t.id})">▲</button>` : ''}
+        ${t.status !== 'pushing'
+          ? `<button class="btn-icon danger" onclick="removeTask(${t.id})">✕</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Status Dropdown
+// ─────────────────────────────────────────────────────────────
+function toggleDd(e, id) {
+  e.stopPropagation();
+  const dd = document.getElementById(`dd-${id}`);
+  if (!dd) return;
+  const open = dd.style.display === 'block';
+  closeAllDropdowns();
+  if (!open) dd.style.display = 'block';
+}
+function closeAllDropdowns() {
+  document.querySelectorAll('.status-dropdown').forEach(d => d.style.display = 'none');
+}
+
+async function changeStatus(e, id, targetJiraName) {
+  e.stopPropagation();
+  closeAllDropdowns();
+  if (!validateConfig()) return;
+  const task = tasks.find(t => t.id === id);
+  if (!task || !task.jiraKey) return;
+  try {
+    const r = await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken,
+      'GET', `/rest/api/3/issue/${task.jiraKey}/transitions`);
+    const d = await r.json();
+    const transitions = d.transitions || [];
+    // Exact match first, then fuzzy on first word
+    const match = transitions.find(x => x.name.toLowerCase() === targetJiraName.toLowerCase())
+               || transitions.find(x => x.name.toLowerCase().includes(targetJiraName.toLowerCase().split(' ')[0]));
+    if (!match) { toast(`✗ Transition "${targetJiraName}" not found in Jira`, 'error'); return; }
+    const r2 = await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken,
+      'POST', `/rest/api/3/issue/${task.jiraKey}/transitions`, { transition: { id: match.id } });
+    if (r2.ok || r2.status === 204) {
+      task.jiraStatusName = match.to?.name || targetJiraName;
+      saveTasks(); renderTasks();
+      toast(`✓ ${task.jiraKey} → ${task.jiraStatusName}`, 'success');
+    } else {
+      const err = await r2.json();
+      toast(`✗ ${err.errorMessages?.[0] || 'Transition failed'}`, 'error');
+    }
+  } catch(e) { toast(`✗ ${e.message}`, 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Push to Jira
+// ─────────────────────────────────────────────────────────────
+async function pushOne(id) {
+  if (!validateConfig()) return;
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  task.status = 'pushing'; task.errorMsg = null;
+  renderTasks();
+  await createSubtask(task);
+  saveTasks(); renderTasks();
+}
+
+async function pushAll() {
+  if (!validateConfig()) return;
+  const pending = tasks.filter(t => t.status === 'local' || t.status === 'error');
+  if (!pending.length) return;
+  toast(`Pushing ${pending.length} task(s)…`, 'info');
+  pending.forEach(t => { t.status = 'pushing'; t.errorMsg = null; });
+  renderTasks();
+  for (const task of pending) { await createSubtask(task); saveTasks(); renderTasks(); await sleep(350); }
+  const failed = tasks.filter(t => t.status === 'error').length;
+  failed === 0
+    ? toast(`All pushed ✓`, 'success')
+    : toast(`${pending.length - failed} pushed, ${failed} failed`, 'error');
+}
+
+async function createSubtask(task) {
+  // ── Build summary using format from jira-config.js ─────────
+  const today = new Date().toLocaleDateString('en-MY', { day:'2-digit', month:'short', year:'numeric' });
+  const summary = JIRA_CONFIG.summaryFormat
+    .replace('{date}', today)
+    .replace('{summary}', task.summary);
+
+  // ── Base issue body ─────────────────────────────────────────
+  const body = {
+    fields: {
+      project:   { key: config.projectKey },
+      parent:    { key: config.parentKey },
+      summary,
+      issuetype: { name: JIRA_CONFIG.issueType },
+      // Auto-assign to me
+      ...(myAccountId ? { assignee: { accountId: myAccountId } } : {}),
+      // Description
+      ...(task.description ? {
+        description: {
+          type: 'doc', version: 1,
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: task.description }] }]
+        }
+      } : {}),
+      // ── Merge custom fields from jira-config.js ─────────────
+      ...JIRA_CONFIG.customFields,
+    }
+  };
+
+  try {
+    const r = await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken, 'POST', '/rest/api/3/issue', body);
+    const d = await r.json();
+    if (r.ok) {
+      task.status         = 'done';
+      task.jiraKey        = d.key;
+      task.jiraId         = d.id;
+      task.jiraUrl        = `${config.jiraUrl}/browse/${d.key}`;
+      task.jiraStatusName = JIRA_CONFIG.statuses[0]?.jiraName || 'To Do';
+      toast(`✓ Created ${d.key}`, 'success');
+      if (task.attachments?.length) await uploadAttachments(task);
+    } else {
+      task.status   = 'error';
+      task.errorMsg = d.errors
+        ? Object.values(d.errors)[0]
+        : (d.errorMessages?.[0] || `HTTP ${r.status}`);
+      toast(`✗ ${task.errorMsg}`, 'error');
+    }
+  } catch(e) { task.status = 'error'; task.errorMsg = e.message; toast(`✗ ${e.message}`, 'error'); }
+}
+
+async function uploadAttachments(task) {
+  for (const att of task.attachments) {
+    try {
+      const base64 = att.dataUrl.split(',')[1];
+      await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken, 'POST',
+        `/rest/api/2/issue/${task.jiraId}/attachments`,
+        { _attachment: true, name: att.name, base64, mimeType: att.type });
+    } catch(e) { console.warn('Attachment upload failed:', e); }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Sync from Jira
+// ─────────────────────────────────────────────────────────────
+async function syncFromJira() {
+  if (!validateConfig()) return;
+  const btn = document.getElementById('syncBtn');
+  btn.classList.add('spinning');
+  try {
+    const r = await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken,
+      'GET', `/rest/api/3/issue/${config.parentKey}?fields=subtasks`);
+    if (!r.ok) { toast('✗ Sync failed', 'error'); return; }
+    const d = await r.json();
+    const subtasks = d.fields?.subtasks || [];
+    if (!subtasks.length) { toast('No subtasks on parent issue', 'info'); return; }
+
+    const today = new Date().toLocaleDateString('en-MY', { day:'2-digit', month:'short', year:'numeric' });
+    const fieldsParam = JIRA_CONFIG.syncFields.join(',');
+    let updated = 0, added = 0;
+
+    for (const sub of subtasks) {
+      const sr = await proxy(config.jiraUrl, config.jiraEmail, config.jiraToken,
+        'GET', `/rest/api/3/issue/${sub.key}?fields=${fieldsParam}`);
+      if (!sr.ok) continue;
+      const sd = await sr.json();
+      const existing = tasks.find(t => t.jiraKey === sub.key);
+      if (existing) {
+        existing.jiraStatusName = sd.fields.status.name;
+        updated++;
+      } else if (sd.fields.summary?.includes(`[${today}]`)) {
+        tasks.push({
+          id:             Date.now() + Math.random(),
+          summary:        sd.fields.summary.replace(`[${today}] `, ''),
+          description:    '',
+          attachments:    [],
+          status:         'done',
+          jiraStatusName: sd.fields.status.name,
+          time:           '—',
+          jiraKey:        sub.key,
+          jiraId:         sub.id,
+          jiraUrl:        `${config.jiraUrl}/browse/${sub.key}`,
+          errorMsg:       null,
+        });
+        added++;
+      }
+      await sleep(100);
+    }
+    saveTasks(); renderTasks();
+    toast(`Sync done · ${updated} updated · ${added} imported`, 'success');
+  } catch(e) { toast(`✗ ${e.message}`, 'error'); }
+  finally { btn.classList.remove('spinning'); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Lightbox
+// ─────────────────────────────────────────────────────────────
+function openLightbox(src) { document.getElementById('lightboxImg').src = src; document.getElementById('lightbox').classList.add('open'); }
+function closeLightbox()   { document.getElementById('lightbox').classList.remove('open'); }
+
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
+function validateConfig() {
+  if (!config.jiraUrl || !config.jiraEmail || !config.jiraToken || !config.parentKey || !config.projectKey) {
+    toast('Fill in Jira Config first', 'error');
+    document.getElementById('configPanel').classList.remove('collapsed');
+    document.getElementById('settingsBtn').classList.add('active');
+    return false;
+  }
+  return true;
+}
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`; el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+async function proxy(jiraUrl, email, token, method, endpoint, data) {
+  return fetch(window._proxyUrl || PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jiraUrl, email, token, method, endpoint, data })
+  });
+}
+</script>
+</body>
+</html>
